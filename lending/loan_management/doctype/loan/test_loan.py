@@ -711,7 +711,7 @@ class TestLoan(unittest.TestCase):
 		# Disbursing 7,00,000 from the allowed 10,00,000 according to security pledge
 		make_loan_disbursement_entry(loan.name, 700000)
 
-		self.assertEqual(get_disbursal_amount(loan.name), 300000)
+		self.assertEqual(get_disbursal_amount(loan.name), (300000, 700000))
 
 	def test_pending_loan_amount_after_closure_request(self):
 		pledge = [{"loan_security": "Test Security 1", "qty": 4000.00}]
