@@ -40,6 +40,7 @@ from lending.loan_management.doctype.loan_security_release.loan_security_release
 from lending.loan_management.doctype.process_loan_classification.process_loan_classification import (
 	create_process_loan_classification,
 )
+from lending.loan_management.doctype.process_loan_demand import process_loan_demand
 from lending.loan_management.doctype.process_loan_demand.process_loan_demand import (
 	process_daily_loan_demands,
 )
@@ -558,11 +559,12 @@ class TestLoan(unittest.TestCase):
 		)
 
 		make_loan_disbursement_entry(loan.name, loan.loan_amount, disbursement_date=first_date)
-		process_loan_interest_accrual_for_loans(posting_date=last_date)
+		process_loan_interest_accrual_for_loans(posting_date=last_date, loan=loan.name)
+		process_daily_loan_demands(posting_date=last_date, loan=loan.name)
 
+		# breakpoint()
 		repayment_entry = create_repayment_entry(
 			loan.name,
-			self.applicant2,
 			add_days(last_date, 5),
 			flt(loan.loan_amount + accrued_interest_amount),
 		)
@@ -583,7 +585,8 @@ class TestLoan(unittest.TestCase):
 		self.assertEqual(loan.status, "Closed")
 		self.assertEqual(sum(pledged_qty.values()), 0)
 
-		amounts = amounts = calculate_amounts(loan.name, add_days(last_date, 5))
+		amounts = calculate_amounts(loan.name, add_days(last_date, 5))
+
 		self.assertEqual(amounts["pending_principal_amount"], 0)
 		self.assertEqual(amounts["payable_principal_amount"], 0.0)
 		self.assertEqual(amounts["interest_amount"], 0)
@@ -1648,7 +1651,7 @@ def create_loan_accounts():
 		"Additional Interest Accrued Account",
 		"Loans and Advances (Assets) - _TC",
 		"Asset",
-		"Receivable",
+		"",
 		"Balance Sheet",
 	)
 
@@ -1716,7 +1719,7 @@ def create_loan_accounts():
 	)
 
 	create_account(
-		"Broken Period Interest", "Direct Income - _TC", "Income", "Income Account", "Profit and Loss"
+		"Broken Period Interest Receivable", "Direct Income - _TC", "", "Receivable", "Profit and Loss"
 	)
 
 	create_account(
@@ -1751,6 +1754,17 @@ def create_account(account_name, parent_account, root_type, account_type, report
 				"is_group": is_group,
 			}
 		).insert(ignore_permissions=True)
+	else:
+		account = frappe.get_doc("Account", {"account_name": account_name})
+		account.company = "_Test Company"
+		account.root_type = root_type
+		account.report_type = report_type
+		account.account_currency = "INR"
+		account.parent_account = parent_account
+		account.account_type = account_type
+		account.is_group = is_group
+
+		account.save()
 
 
 def create_loan_product(
