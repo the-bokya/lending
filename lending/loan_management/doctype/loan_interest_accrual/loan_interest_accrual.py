@@ -11,6 +11,7 @@ from frappe.utils import (
 	date_diff,
 	flt,
 	get_datetime,
+	get_first_day,
 	get_first_day_of_week,
 	get_last_day,
 	getdate,
@@ -974,22 +975,25 @@ def get_interest_amount(
 	principal_amount=None,
 	rate_of_interest=None,
 	company=None,
-	posting_date=None,
-	interest_per_day=None,
+	from_date=None,
+	to_date=None,
 ):
 	interest_day_count_convention = frappe.get_cached_value(
 		"Company", company, "interest_day_count_convention"
 	)
 
-	if not interest_per_day:
-		interest_per_day = get_per_day_interest(
-			principal_amount, rate_of_interest, company, posting_date, interest_day_count_convention
-		)
+	if interest_day_count_convention.startswith("30"):
+		normalized_days = 0
+		if from_date.month < to_date.month:
+			days_in_from_date = date_diff(get_last_day(from_date), from_date) + 1
+			days_in_to_date = date_diff(get_first_day(to_date), from_date) + 1
+			normalized_days += days_in_from_date * 30 / get_days_in_month_from_date(from_date)
+			normalized_days += days_in_to_date * 30 / get_days_in_month_from_date(to_date)
+			normalized_days += get_first_day()
+		else:
+			pass
 
-	if interest_day_count_convention == "30/365" or interest_day_count_convention == "30/360":
-		no_of_days = 30
-
-	return interest_per_day * no_of_days
+	return no_of_days
 
 
 def reverse_loan_interest_accruals(
@@ -1145,3 +1149,7 @@ def add_maturity_breaks(parent_wise_schedules, schedules_details, posting_date):
 			parent_wise_schedules[schedule.name].append(getdate(to_accrual_date))
 
 	return maturity_map
+
+
+def get_days_in_month_from_date(date):
+	return date_diff(get_last_day(date), get_first_day(date)) + 1
