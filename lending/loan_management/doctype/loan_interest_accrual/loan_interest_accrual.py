@@ -971,29 +971,46 @@ def get_per_day_interest(
 
 
 def get_interest_amount(
-	no_of_days,
+	from_date=None,
+	to_date=None,
 	principal_amount=None,
 	rate_of_interest=None,
 	company=None,
-	from_date=None,
-	to_date=None,
 ):
 	interest_day_count_convention = frappe.get_cached_value(
 		"Company", company, "interest_day_count_convention"
 	)
+	interest_amount = 0
+	if (from_date.year, from_date.month) < (to_date.year, to_date.month):
+		current_from_date = from_date
+		current_to_date = get_last_day(current_from_date)
+		while True:
+			interest_amount += get_interest_amount(
+				from_date=current_from_date,
+				to_date=current_to_date,
+				principal_amount=principal_amount,
+				rate_of_interest=rate_of_interest,
+				company=company,
+			)
+			if current_to_date == to_date:
+				break
+			current_from_date = add_days(get_last_day(current_from_date), 1)
+			current_to_date = min(get_last_day(current_from_date), to_date)
+	else:
+		no_of_days = date_diff(to_date, from_date) + 1
+		if interest_day_count_convention.startswith("30"):
+			no_of_days *= 30 / get_days_in_month_from_date(to_date)
 
-	if interest_day_count_convention.startswith("30"):
-		normalized_days = 0
-		if from_date.month < to_date.month:
-			days_in_from_date = date_diff(get_last_day(from_date), from_date) + 1
-			days_in_to_date = date_diff(get_first_day(to_date), from_date) + 1
-			normalized_days += days_in_from_date * 30 / get_days_in_month_from_date(from_date)
-			normalized_days += days_in_to_date * 30 / get_days_in_month_from_date(to_date)
-			normalized_days += get_first_day()
-		else:
-			pass
+		interest_amount = principal_amount * (rate_of_interest / 100) * no_of_days
 
-	return no_of_days
+		if interest_day_count_convention.endswith("365"):
+			interest_amount /= 365
+		if interest_day_count_convention.endswith("360"):
+			interest_amount /= 360
+		if interest_day_count_convention.endswith("Actual"):
+			interest_amount /= get_days_in_year_from_date(to_date)
+
+	return interest_amount
 
 
 def reverse_loan_interest_accruals(
@@ -1153,3 +1170,17 @@ def add_maturity_breaks(parent_wise_schedules, schedules_details, posting_date):
 
 def get_days_in_month_from_date(date):
 	return date_diff(get_last_day(date), get_first_day(date)) + 1
+
+
+def get_days_in_year_from_date(date):
+	year = getdate(date).year
+	# weird leap year logic
+	if year % 4 == 0:
+		if year % 100 == 0:
+			if year % 400 == 0:
+				return 366
+			else:
+				return 365
+		else:
+			return 366
+	return 365
