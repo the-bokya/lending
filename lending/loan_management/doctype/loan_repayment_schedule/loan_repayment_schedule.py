@@ -1033,19 +1033,27 @@ class LoanRepaymentSchedule(Document):
 			interest_amount = get_interest_amount(
 				prev_date, current_date, total_balance, self.rate_of_interest, self.company
 			)
-			principal_amount_paid = monthly_repayment_amount - interest_amount
-			total_balance -= principal_amount_paid
-
-			print(
-				current_date, principal_amount_paid, interest_amount, monthly_repayment_amount, total_balance
-			)
+			principal_amount_paid = 0
+			current_monthly_repayment_amount = 0
+			if i < self.moratorium_tenure:
+				if self.moratorium_type == "Principal":
+					total_balance -= interest_amount
+					current_monthly_repayment_amount = interest_amount
+				elif self.moratorium_type == "EMI":
+					current_monthly_repayment_amount = 0
+				else:
+					frappe.throw(_("Please set a proper moratorium type"))
+			else:
+				principal_amount_paid = monthly_repayment_amount - interest_amount
+				total_balance -= principal_amount_paid
+				current_monthly_repayment_amount = monthly_repayment_amount
 
 			if generate_schedule:
 				self.add_repayment_schedule_row(
 					current_date,
 					principal_amount_paid,
 					interest_amount,
-					monthly_repayment_amount,
+					current_monthly_repayment_amount,
 					total_balance,
 					date_diff(current_date, prev_date),
 				)
