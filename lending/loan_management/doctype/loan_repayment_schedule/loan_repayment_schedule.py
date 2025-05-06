@@ -18,9 +18,11 @@ from frappe.utils import (
 
 from lending.loan_management.doctype.loan.loan import get_cyclic_date
 from lending.loan_management.doctype.loan_demand.loan_demand import create_loan_demand
+from lending.loan_management.doctype.loan_interest_accrual.loan_interest_accrual import (
+	get_interest_amount,
+)
 from lending.loan_management.doctype.loan_repayment_schedule.utils import (
 	add_single_month,
-	get_amounts,
 	get_loan_partner_details,
 	get_monthly_repayment_amount,
 	set_demand,
@@ -382,125 +384,172 @@ class LoanRepaymentSchedule(Document):
 		if additional_days < 0:
 			self.broken_period_interest_days = 0
 
-		while balance_amount > 0:
-			if self.moratorium_tenure and self.repayment_frequency == "Monthly":
-				if getdate(payment_date) > getdate(self.moratorium_end_date):
-					if (
-						self.moratorium_type == "EMI"
-						and self.treatment_of_interest == "Capitalize"
-						and moratorium_interest
-					):
-						balance_amount = self.loan_amount + moratorium_interest
-						monthly_repayment_amount = get_monthly_repayment_amount(
-							balance_amount, rate_of_interest, self.repayment_periods, self.repayment_frequency
-						)
-						moratorium_interest = 0
+		# self.repayment_schedule_from_monthly_repayment_amount is a very simple function
+		# it takes any monthly_repayment_amount, a tenure and other things like the current_principal_amount
+		# and start dates
 
-			prev_balance_amount = balance_amount
+		# for example, if you provide 0 as the monthly repayment amount, you get the following repayment schedule
 
-			payment_days, months = self.get_days_and_months(
-				payment_date,
-				additional_days,
-				balance_amount,
-				rate_of_interest,
-				schedule_field,
-				principal_share_percentage,
-				interest_share_percentage,
-			)
+		# 2024-09-01 -395.89 395.89 0 100395.89
+		# 2024-10-01 -724.77 724.77 0 101120.66
+		# 2024-11-01 -753.55 753.55 0 101874.22
+		# 2024-12-01 -735.44 735.44 0 102609.67
+		# 2025-01-01 -764.65 764.65 0 103374.32
 
-			(
-				interest_amount,
-				principal_amount,
-				balance_amount,
-				total_payment,
-				days,
-				previous_interest_amount,
-			) = get_amounts(
-				balance_amount,
-				rate_of_interest,
-				payment_days,
-				months,
-				monthly_repayment_amount,
-				carry_forward_interest,
-				previous_interest_amount,
-				additional_principal_amount,
-				pending_prev_days,
-			)
+		# if it's given the value 10000
+		# 2024-09-01  99604.10   395.89   100000     395.89
+		# 2024-10-01  99997.14     2.85   100000  -99601.25
+		# 2024-11-01 100742.21  -742.23   100000 -200343.48
+		# 2024-12-01 101446.34 -1446.31   100000 -301789.80
+		# 2025-01-01 102248.98 -2248.95   100000 -404038.75
 
-			if (
-				schedule_field == "colender_schedule"
-				and partner_schedule_type == "POS reduction plus interest at partner ROI"
-				and row <= len(self.get("repayment_schedule")) - 1
-			):
-				principal_amount = self.get("repayment_schedule")[row].principal_amount
-				balance_amount = prev_balance_amount - (principal_amount * principal_share_percentage / 100)
-				row = row + 1
+		# Through some digging and trial and error, I stumbled upon the fact that there
+		# is a linear proportionality between the final remaining balance and the monthly repayment amount
+		# provided.
+		# This boils remaining_total_balance = self.repayment_schedule_from_monthly_repayment_amount(monthly_repayment_amount, tenure)
+		# to y = m*x + c
+		# here, remaining_total_balance = m*monthly_repayment_amount + c
+		# where m is the slope and c is the constant!
+		# Now all you need are two points (x1, y1) and (x2, y2) to chart out the entire line!
+		# Below you get two pairs here in the form of (0, remaining_total_balance_a) and (self.current_principal_amount, remaining_total_balance_b)
+		# Now you just need to derive the line and find the monthly_repayment_amount that makes y (remaining_total_balance) 0,
+		# because the balance at the end needs to be 0
 
-			if (
-				self.moratorium_end_date and self.moratorium_tenure and self.repayment_frequency == "Monthly"
-			):
-				if getdate(payment_date) <= getdate(self.moratorium_end_date):
-					principal_amount = 0
-					balance_amount = self.current_principal_amount
-					moratorium_interest += interest_amount
+		# A virtue of this method is it can be used to simulate all sorts of conditions in the repayment schedule and the repayment schedule
+		# can be correctly generated as long as the relationships are linear
 
-					if self.moratorium_type == "EMI":
-						total_payment = 0
-						interest_amount = 0
-					else:
-						total_payment = interest_amount
+		remaining_total_balance_a = self.repayment_schedule_from_monthly_repayment_amount(0, tenure)
+		remaining_total_balance_b = self.repayment_schedule_from_monthly_repayment_amount(
+			self.current_principal_amount, tenure
+		)
 
-				elif (
-					self.moratorium_type == "EMI"
-					and self.treatment_of_interest == "Add to first repayment"
-					and moratorium_interest
-				):
-					interest_amount += moratorium_interest
-					total_payment = principal_amount + interest_amount
-					moratorium_interest = 0
+		c = remaining_total_balance_a
+		m = (remaining_total_balance_b - c) / self.current_principal_amount
 
-			self.add_repayment_schedule_row(
-				payment_date,
-				principal_amount,
-				interest_amount,
-				total_payment,
-				balance_amount,
-				days,
-				repayment_schedule_field=schedule_field,
-				principal_share_percentage=principal_share_percentage,
-				interest_share_percentage=interest_share_percentage,
-			)
+		correct_repayment_amount = -(c / m)
+		self.repayment_schedule_from_monthly_repayment_amount(
+			correct_repayment_amount, tenure, generate_schedule=True
+		)
 
-			# All the residue amount is added to the last row for "Repay Over Number of Periods"
-			#
-			# Also, when such a Repayment Schedule is rescheduled, its repayment_method changes to Repay Fixed Amount per Period
-			# Here, the tenure shouldn't change. Thus, if this is a restructed repayment schedule, the last row is all the residue amount left.
-			# This is a special case.
-
-			if (
-				self.repayment_method == "Repay Over Number of Periods"
-				or (self.restructure_type and self.repayment_method == "Repay Fixed Amount per Period")
-			) and len(self.get(schedule_field)) >= tenure:
-				self.get(schedule_field)[-1].principal_amount += balance_amount
-				self.get(schedule_field)[-1].balance_loan_amount = 0
-				self.get(schedule_field)[-1].total_payment = (
-					self.get(schedule_field)[-1].interest_amount + self.get(schedule_field)[-1].principal_amount
-				)
-				balance_amount = 0
-
-			payment_date = self.get_next_payment_date(payment_date)
-			carry_forward_interest = 0
-			additional_days = 0
-			additional_principal_amount = 0
-			pending_prev_days = 0
-
-		if schedule_field == "repayment_schedule" and not self.restructure_type:
-			if self.repayment_frequency == "One Time":
-				self.monthly_repayment_amount = self.get(schedule_field)[0].total_payment
-			else:
-				self.monthly_repayment_amount = monthly_repayment_amount
-		else:
-			self.repayment_periods = self.number_of_rows
+		# while balance_amount > 0:
+		# 	if self.moratorium_tenure and self.repayment_frequency == "Monthly":
+		# 		if getdate(payment_date) > getdate(self.moratorium_end_date):
+		# 			if (
+		# 				self.moratorium_type == "EMI"
+		# 				and self.treatment_of_interest == "Capitalize"
+		# 				and moratorium_interest
+		# 			):
+		# 				balance_amount = self.loan_amount + moratorium_interest
+		# 				monthly_repayment_amount = get_monthly_repayment_amount(
+		# 					balance_amount, rate_of_interest, self.repayment_periods, self.repayment_frequency
+		# 				)
+		# 				moratorium_interest = 0
+		#
+		# 	prev_balance_amount = balance_amount
+		#
+		# 	payment_days, months = self.get_days_and_months(
+		# 		payment_date,
+		# 		additional_days,
+		# 		balance_amount,
+		# 		rate_of_interest,
+		# 		schedule_field,
+		# 		principal_share_percentage,
+		# 		interest_share_percentage,
+		# 	)
+		#
+		# 	(
+		# 		interest_amount,
+		# 		principal_amount,
+		# 		balance_amount,
+		# 		total_payment,
+		# 		days,
+		# 		previous_interest_amount,
+		# 	) = get_amounts(
+		# 		balance_amount,
+		# 		rate_of_interest,
+		# 		payment_days,
+		# 		months,
+		# 		monthly_repayment_amount,
+		# 		carry_forward_interest,
+		# 		previous_interest_amount,
+		# 		additional_principal_amount,
+		# 		pending_prev_days,
+		# 	)
+		#
+		# 	if (
+		# 		schedule_field == "colender_schedule"
+		# 		and partner_schedule_type == "POS reduction plus interest at partner ROI"
+		# 		and row <= len(self.get("repayment_schedule")) - 1
+		# 	):
+		# 		principal_amount = self.get("repayment_schedule")[row].principal_amount
+		# 		balance_amount = prev_balance_amount - (principal_amount * principal_share_percentage / 100)
+		# 		row = row + 1
+		#
+		# 	if (
+		# 		self.moratorium_end_date and self.moratorium_tenure and self.repayment_frequency == "Monthly"
+		# 	):
+		# 		if getdate(payment_date) <= getdate(self.moratorium_end_date):
+		# 			principal_amount = 0
+		# 			balance_amount = self.current_principal_amount
+		# 			moratorium_interest += interest_amount
+		#
+		# 			if self.moratorium_type == "EMI":
+		# 				total_payment = 0
+		# 				interest_amount = 0
+		# 			else:
+		# 				total_payment = interest_amount
+		#
+		# 		elif (
+		# 			self.moratorium_type == "EMI"
+		# 			and self.treatment_of_interest == "Add to first repayment"
+		# 			and moratorium_interest
+		# 		):
+		# 			interest_amount += moratorium_interest
+		# 			total_payment = principal_amount + interest_amount
+		# 			moratorium_interest = 0
+		#
+		# 	self.add_repayment_schedule_row(
+		# 		payment_date,
+		# 		principal_amount,
+		# 		interest_amount,
+		# 		total_payment,
+		# 		balance_amount,
+		# 		days,
+		# 		repayment_schedule_field=schedule_field,
+		# 		principal_share_percentage=principal_share_percentage,
+		# 		interest_share_percentage=interest_share_percentage,
+		# 	)
+		#
+		# 	# All the residue amount is added to the last row for "Repay Over Number of Periods"
+		# 	#
+		# 	# Also, when such a Repayment Schedule is rescheduled, its repayment_method changes to Repay Fixed Amount per Period
+		# 	# Here, the tenure shouldn't change. Thus, if this is a restructed repayment schedule, the last row is all the residue amount left.
+		# 	# This is a special case.
+		#
+		# 	if (
+		# 		self.repayment_method == "Repay Over Number of Periods"
+		# 		or (self.restructure_type and self.repayment_method == "Repay Fixed Amount per Period")
+		# 	) and len(self.get(schedule_field)) >= tenure:
+		# 		self.get(schedule_field)[-1].principal_amount += balance_amount
+		# 		self.get(schedule_field)[-1].balance_loan_amount = 0
+		# 		self.get(schedule_field)[-1].total_payment = (
+		# 			self.get(schedule_field)[-1].interest_amount + self.get(schedule_field)[-1].principal_amount
+		# 		)
+		# 		balance_amount = 0
+		#
+		# 	payment_date = self.get_next_payment_date(payment_date)
+		# 	carry_forward_interest = 0
+		# 	additional_days = 0
+		# 	additional_principal_amount = 0
+		# 	pending_prev_days = 0
+		#
+		# if schedule_field == "repayment_schedule" and not self.restructure_type:
+		# 	if self.repayment_frequency == "One Time":
+		# 		self.monthly_repayment_amount = self.get(schedule_field)[0].total_payment
+		# 	else:
+		# 		self.monthly_repayment_amount = monthly_repayment_amount
+		# else:
+		# 	self.repayment_periods = self.number_of_rows
 
 	def get_next_payment_date(self, payment_date):
 		if (
@@ -972,3 +1021,34 @@ class LoanRepaymentSchedule(Document):
 
 	def increment_number_of_rows(self, payment_date):
 		self.number_of_rows += 1
+
+	def repayment_schedule_from_monthly_repayment_amount(
+		self, monthly_repayment_amount, tenure, generate_schedule=False
+	):
+		prev_date = getdate(self.posting_date)
+		current_date = getdate(self.repayment_start_date)
+		total_balance = self.current_principal_amount
+
+		for i in range(tenure):
+			interest_amount = get_interest_amount(
+				prev_date, current_date, total_balance, self.rate_of_interest, self.company
+			)
+			principal_amount_paid = monthly_repayment_amount - interest_amount
+			total_balance -= principal_amount_paid
+
+			print(
+				current_date, principal_amount_paid, interest_amount, monthly_repayment_amount, total_balance
+			)
+
+			if generate_schedule:
+				self.add_repayment_schedule_row(
+					current_date,
+					principal_amount_paid,
+					interest_amount,
+					monthly_repayment_amount,
+					total_balance,
+					date_diff(current_date, prev_date),
+				)
+			prev_date = current_date
+			current_date = self.get_next_payment_date(current_date)
+		return total_balance
