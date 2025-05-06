@@ -279,24 +279,23 @@ class LoanRepaymentSchedule(Document):
 		self.set("repayment_schedule", [])
 
 		self.broken_period_interest = 0
-		(
-			previous_interest_amount,
-			balance_amount,
-			additional_principal_amount,
-			pending_prev_days,
-		) = self.add_rows_from_prev_disbursement("repayment_schedule", 100, 100)
+		# (
+		# 	previous_interest_amount,
+		# 	balance_amount,
+		# 	additional_principal_amount,
+		# 	pending_prev_days,
+		# ) = self.add_rows_from_prev_disbursement("repayment_schedule", 100, 100)
 
-		if flt(balance_amount, self.precision) > 0:
-			self.make_repayment_schedule(
-				"repayment_schedule",
-				previous_interest_amount,
-				balance_amount,
-				additional_principal_amount,
-				pending_prev_days,
-				self.rate_of_interest,
-				100,
-				100,
-			)
+		self.make_repayment_schedule(
+			"repayment_schedule",
+			0,
+			self.current_principal_amount,
+			0,
+			0,
+			self.rate_of_interest,
+			100,
+			100,
+		)
 
 	def make_co_lender_schedule(self):
 		if not self.loan_partner:
@@ -1045,8 +1044,8 @@ class LoanRepaymentSchedule(Document):
 		prev_date = getdate(self.posting_date)
 		current_date = getdate(self.repayment_start_date)
 		total_balance = self.current_principal_amount
-
-		for i in range(tenure):
+		i = 0
+		while True:
 			interest_amount = get_interest_amount(
 				prev_date, add_days(current_date, -1), total_balance, self.rate_of_interest, self.company
 			)
@@ -1066,10 +1065,11 @@ class LoanRepaymentSchedule(Document):
 				current_monthly_repayment_amount = monthly_repayment_amount
 
 			if self.repayment_method == "Repay Fixed Amount per Period":
-				if i == tenure - 1:
+				if total_balance < 0:
 					current_monthly_repayment_amount += total_balance
 					principal_amount_paid += total_balance
 					total_balance = 0
+
 			if generate_schedule:
 				self.add_repayment_schedule_row(
 					current_date,
@@ -1079,6 +1079,14 @@ class LoanRepaymentSchedule(Document):
 					total_balance,
 					date_diff(current_date, prev_date),
 				)
+
+			if self.repayment_method == "Repay Over Number of Periods":
+				if i == tenure - 1:
+					break
+			else:
+				if total_balance == 0:
+					break
 			prev_date = current_date
 			current_date = self.get_next_payment_date(current_date)
+			i += 1
 		return total_balance
