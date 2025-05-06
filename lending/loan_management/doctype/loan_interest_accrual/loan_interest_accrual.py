@@ -334,11 +334,11 @@ def calculate_accrual_amount_for_loans(
 		pending_principal_amount = get_pending_principal_amount(loan)
 
 		payable_interest = get_interest_amount(
-			no_of_days,
+			from_date=last_accrual_date,
+			to_date=posting_date or nowdate(),
 			principal_amount=pending_principal_amount,
 			rate_of_interest=loan.rate_of_interest,
 			company=loan.company,
-			posting_date=posting_date,
 		)
 
 		if payable_interest > 0:
@@ -461,13 +461,12 @@ def is_posting_date_accrual_day(loan_accrual_frequency, posting_date):
 
 
 def get_interest_for_term(company, rate_of_interest, pending_principal_amount, from_date, to_date):
-	no_of_days = date_diff(to_date, from_date) + 1
 	payable_interest = get_interest_amount(
-		no_of_days,
+		from_date=from_date,
+		to_date=to_date,
 		principal_amount=pending_principal_amount,
 		rate_of_interest=rate_of_interest,
 		company=company,
-		posting_date=to_date,
 	)
 
 	return payable_interest
@@ -977,6 +976,8 @@ def get_interest_amount(
 	rate_of_interest=None,
 	company=None,
 ):
+	from_date = getdate(from_date)
+	to_date = getdate(to_date)
 	interest_day_count_convention = frappe.get_cached_value(
 		"Company", company, "interest_day_count_convention"
 	)
