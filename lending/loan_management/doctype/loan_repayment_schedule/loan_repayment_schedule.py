@@ -418,15 +418,29 @@ class LoanRepaymentSchedule(Document):
 		# A virtue of this method is it can be used to simulate all sorts of conditions in the repayment schedule and the repayment schedule
 		# can be correctly generated as long as the relationships are linear
 
-		remaining_total_balance_a = self.repayment_schedule_from_monthly_repayment_amount(0, tenure)
-		remaining_total_balance_b = self.repayment_schedule_from_monthly_repayment_amount(
-			self.current_principal_amount, tenure
-		)
+		if self.repayment_method == "Repay Over Number of Periods":
+			remaining_total_balance_a = self.repayment_schedule_from_monthly_repayment_amount(0, tenure)
+			remaining_total_balance_b = self.repayment_schedule_from_monthly_repayment_amount(
+				self.current_principal_amount, tenure
+			)
 
-		c = remaining_total_balance_a
-		m = (remaining_total_balance_b - c) / self.current_principal_amount
+			c = remaining_total_balance_a
+			m = (remaining_total_balance_b - c) / self.current_principal_amount
 
-		correct_repayment_amount = -(c / m)
+			correct_repayment_amount = -(c / m)
+		else:
+			correct_repayment_amount = self.monthly_repayment_amount
+		# 	if (
+		# 		self.repayment_method == "Repay Over Number of Periods"
+		# 		or (self.restructure_type and self.repayment_method == "Repay Fixed Amount per Period")
+		# 	) and len(self.get(schedule_field)) >= tenure:
+		# 		self.get(schedule_field)[-1].principal_amount += balance_amount
+		# 		self.get(schedule_field)[-1].balance_loan_amount = 0
+		# 		self.get(schedule_field)[-1].total_payment = (
+		# 			self.get(schedule_field)[-1].interest_amount + self.get(schedule_field)[-1].principal_amount
+		# 		)
+		# 		balance_amount = 0
+
 		self.repayment_schedule_from_monthly_repayment_amount(
 			correct_repayment_amount, tenure, generate_schedule=True
 		)
@@ -1023,7 +1037,10 @@ class LoanRepaymentSchedule(Document):
 		self.number_of_rows += 1
 
 	def repayment_schedule_from_monthly_repayment_amount(
-		self, monthly_repayment_amount, tenure, generate_schedule=False
+		self,
+		monthly_repayment_amount,
+		tenure,
+		generate_schedule=False,
 	):
 		prev_date = getdate(self.posting_date)
 		current_date = getdate(self.repayment_start_date)
@@ -1031,7 +1048,7 @@ class LoanRepaymentSchedule(Document):
 
 		for i in range(tenure):
 			interest_amount = get_interest_amount(
-				prev_date, current_date, total_balance, self.rate_of_interest, self.company
+				prev_date, add_days(current_date, -1), total_balance, self.rate_of_interest, self.company
 			)
 			principal_amount_paid = 0
 			current_monthly_repayment_amount = 0
@@ -1048,6 +1065,11 @@ class LoanRepaymentSchedule(Document):
 				total_balance -= principal_amount_paid
 				current_monthly_repayment_amount = monthly_repayment_amount
 
+			if self.repayment_method == "Repay Fixed Amount per Period":
+				if i == tenure - 1:
+					current_monthly_repayment_amount += total_balance
+					principal_amount_paid += total_balance
+					total_balance = 0
 			if generate_schedule:
 				self.add_repayment_schedule_row(
 					current_date,
