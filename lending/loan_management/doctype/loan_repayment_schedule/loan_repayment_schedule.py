@@ -404,9 +404,11 @@ class LoanRepaymentSchedule(Document):
 		# can be correctly generated as long as the relationships are linear
 
 		if self.repayment_method == "Repay Over Number of Periods":
-			remaining_total_balance_a = self.repayment_schedule_from_monthly_repayment_amount(0, tenure)
+			remaining_total_balance_a = self.repayment_schedule_from_monthly_repayment_amount(
+				0, tenure, previous_interest_amount
+			)
 			remaining_total_balance_b = self.repayment_schedule_from_monthly_repayment_amount(
-				self.current_principal_amount, tenure
+				self.current_principal_amount, tenure, previous_interest_amount
 			)
 
 			c = remaining_total_balance_a
@@ -427,7 +429,7 @@ class LoanRepaymentSchedule(Document):
 		# 		balance_amount = 0
 
 		self.repayment_schedule_from_monthly_repayment_amount(
-			correct_repayment_amount, tenure, generate_schedule=True
+			correct_repayment_amount, tenure, previous_interest_amount, generate_schedule=True
 		)
 
 		# while balance_amount > 0:
@@ -1019,6 +1021,7 @@ class LoanRepaymentSchedule(Document):
 		self,
 		monthly_repayment_amount,
 		tenure,
+		previous_interest_amount,
 		moratorium_interest=0,
 		generate_schedule=False,
 	):
@@ -1056,6 +1059,10 @@ class LoanRepaymentSchedule(Document):
 					frappe.throw(_("Please set a proper moratorium type"))
 
 			else:
+				if previous_interest_amount:
+					interest_amount += previous_interest_amount
+					previous_interest_amount = 0
+
 				principal_amount_paid = monthly_repayment_amount - interest_amount
 				current_monthly_repayment_amount += monthly_repayment_amount
 
