@@ -279,19 +279,19 @@ class LoanRepaymentSchedule(Document):
 		self.set("repayment_schedule", [])
 
 		self.broken_period_interest = 0
-		# (
-		# 	previous_interest_amount,
-		# 	balance_amount,
-		# 	additional_principal_amount,
-		# 	pending_prev_days,
-		# ) = self.add_rows_from_prev_disbursement("repayment_schedule", 100, 100)
+		(
+			previous_interest_amount,
+			balance_amount,
+			additional_principal_amount,
+			pending_prev_days,
+		) = self.add_rows_from_prev_disbursement("repayment_schedule", 100, 100)
 
 		self.make_repayment_schedule(
 			"repayment_schedule",
-			0,
-			self.current_principal_amount,
-			0,
-			0,
+			previous_interest_amount,
+			balance_amount,
+			additional_principal_amount,
+			pending_prev_days,
 			self.rate_of_interest,
 			100,
 			100,
@@ -352,24 +352,9 @@ class LoanRepaymentSchedule(Document):
 		payment_date = self.repayment_start_date
 		carry_forward_interest = self.adjusted_interest
 		moratorium_interest = 0
-		row = 0
-		if not self.restructure_type and self.repayment_method != "Repay Fixed Amount per Period":
-			monthly_repayment_amount = get_monthly_repayment_amount(
-				balance_amount, rate_of_interest, self.repayment_periods, self.repayment_frequency
-			)
-		else:
-			monthly_repayment_amount = self.monthly_repayment_amount
 
 		if not self.restructure_type:
-			if (
-				self.moratorium_tenure
-				and self.repayment_frequency == "Monthly"
-				and self.repayment_schedule_type == "Monthly as per cycle date"
-			):
-				payment_date = self.repayment_start_date
-				self.repayment_start_date = add_months(payment_date, self.moratorium_tenure)
-				self.moratorium_end_date = add_months(self.repayment_start_date, -1)
-			elif self.moratorium_tenure and self.repayment_frequency == "Monthly":
+			if self.moratorium_tenure and self.repayment_frequency == "Monthly":
 				self.moratorium_end_date = add_months(self.repayment_start_date, self.moratorium_tenure)
 				if self.repayment_schedule_type == "Pro-rated calendar months":
 					self.moratorium_end_date = add_days(self.moratorium_end_date, -1)
@@ -412,6 +397,7 @@ class LoanRepaymentSchedule(Document):
 		# Now all you need are two points (x1, y1) and (x2, y2) to chart out the entire line!
 		# Below you get two pairs here in the form of (0, remaining_total_balance_a) and (self.current_principal_amount, remaining_total_balance_b)
 		# Now you just need to derive the line and find the monthly_repayment_amount that makes y (remaining_total_balance) 0,
+		# which is the point (correct_repayment_amount, 0)
 		# because the balance at the end needs to be 0
 
 		# A virtue of this method is it can be used to simulate all sorts of conditions in the repayment schedule and the repayment schedule
@@ -670,7 +656,6 @@ class LoanRepaymentSchedule(Document):
 						row.payment_date,
 						row.principal_amount,
 						row.interest_amount,
-						row.total_payment,
 						row.balance_loan_amount,
 						row.number_of_days,
 						demand_generated=row.demand_generated,
@@ -697,7 +682,6 @@ class LoanRepaymentSchedule(Document):
 								row.payment_date,
 								row.principal_amount,
 								row.interest_amount,
-								row.total_payment,
 								row.balance_loan_amount,
 								row.number_of_days,
 								demand_generated=row.demand_generated,
@@ -780,7 +764,6 @@ class LoanRepaymentSchedule(Document):
 						next_emi_date,
 						paid_principal_amount,
 						interest_amount,
-						total_payment,
 						balance_principal_amount,
 						pending_prev_days,
 						0,
@@ -840,7 +823,6 @@ class LoanRepaymentSchedule(Document):
 						next_emi_date,
 						principal_amount,
 						interest_amount,
-						total_payment,
 						balance_principal_amount,
 						pending_prev_days,
 						0,
@@ -980,7 +962,6 @@ class LoanRepaymentSchedule(Document):
 			payment_date,
 			0,
 			interest_amount,
-			interest_amount,
 			balance_amount,
 			additional_days,
 			repayment_schedule_field=schedule_field,
@@ -993,7 +974,6 @@ class LoanRepaymentSchedule(Document):
 		payment_date,
 		principal_amount,
 		interest_amount,
-		total_payment,
 		balance_loan_amount,
 		days,
 		demand_generated=0,
@@ -1039,30 +1019,59 @@ class LoanRepaymentSchedule(Document):
 		self,
 		monthly_repayment_amount,
 		tenure,
+		moratorium_interest=0,
 		generate_schedule=False,
 	):
 		prev_date = getdate(self.posting_date)
 		current_date = getdate(self.repayment_start_date)
 		total_balance = self.current_principal_amount
 		i = 0
+
+		# schedule stats
+		in_moratorium = False
+		moratorium_interest = 0
 		while True:
+			# The 3 primary amounts
+			principal_amount_paid = 0
+			current_monthly_repayment_amount = 0
 			interest_amount = get_interest_amount(
 				prev_date, add_days(current_date, -1), total_balance, self.rate_of_interest, self.company
 			)
-			principal_amount_paid = 0
-			current_monthly_repayment_amount = 0
+
+			# set schedule states
 			if i < self.moratorium_tenure:
+				in_moratorium = True
+			else:
+				in_moratorium = False
+
+			if in_moratorium:
+				moratorium_interest += interest_amount
 				if self.moratorium_type == "Principal":
 					total_balance -= interest_amount
 					current_monthly_repayment_amount = interest_amount
 				elif self.moratorium_type == "EMI":
 					current_monthly_repayment_amount = 0
+					interest_amount = 0
 				else:
 					frappe.throw(_("Please set a proper moratorium type"))
+
 			else:
 				principal_amount_paid = monthly_repayment_amount - interest_amount
-				total_balance -= principal_amount_paid
-				current_monthly_repayment_amount = monthly_repayment_amount
+				current_monthly_repayment_amount += monthly_repayment_amount
+
+			total_balance -= principal_amount_paid
+
+			# exiting the moratorium period
+			if moratorium_interest > 0 and not in_moratorium:
+				if self.treatment_of_interest == "Capitalize":
+					total_balance += moratorium_interest
+				elif self.treatment_of_interest == "Add to first repayment":
+					current_monthly_repayment_amount += moratorium_interest
+					interest_amount += moratorium_interest
+				else:
+					frappe.throw(_("Treatment of Interest not properly set"))
+
+				moratorium_interest = 0
 
 			if self.repayment_method == "Repay Fixed Amount per Period":
 				if total_balance < 0:
@@ -1075,7 +1084,6 @@ class LoanRepaymentSchedule(Document):
 					current_date,
 					principal_amount_paid,
 					interest_amount,
-					current_monthly_repayment_amount,
 					total_balance,
 					date_diff(current_date, prev_date),
 				)
