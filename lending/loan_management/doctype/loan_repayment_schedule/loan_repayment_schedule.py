@@ -368,6 +368,9 @@ class LoanRepaymentSchedule(Document):
 		if additional_days < 0:
 			self.broken_period_interest_days = 0
 
+		if additional_principal_amount:
+			balance_amount = additional_principal_amount
+			additional_principal_amount = 0
 		# self.repayment_schedule_from_monthly_repayment_amount is a very simple function
 		# it takes any monthly_repayment_amount, a tenure and other things like the current_principal_amount
 		# and start dates
@@ -405,10 +408,14 @@ class LoanRepaymentSchedule(Document):
 
 		if self.repayment_method == "Repay Over Number of Periods":
 			remaining_total_balance_a = self.repayment_schedule_from_monthly_repayment_amount(
-				0, tenure, previous_interest_amount
+				0, tenure, balance_amount, rate_of_interest, previous_interest_amount
 			)
 			remaining_total_balance_b = self.repayment_schedule_from_monthly_repayment_amount(
-				self.current_principal_amount, tenure, previous_interest_amount
+				self.current_principal_amount,
+				tenure,
+				balance_amount,
+				rate_of_interest,
+				previous_interest_amount,
 			)
 
 			c = remaining_total_balance_a
@@ -429,7 +436,12 @@ class LoanRepaymentSchedule(Document):
 		# 		balance_amount = 0
 
 		self.repayment_schedule_from_monthly_repayment_amount(
-			correct_repayment_amount, tenure, previous_interest_amount, generate_schedule=True
+			correct_repayment_amount,
+			tenure,
+			balance_amount,
+			rate_of_interest,
+			previous_interest_amount,
+			generate_schedule=True,
 		)
 
 		# while balance_amount > 0:
@@ -1021,13 +1033,15 @@ class LoanRepaymentSchedule(Document):
 		self,
 		monthly_repayment_amount,
 		tenure,
+		balance_amount,
+		rate_of_interest,
 		previous_interest_amount,
 		moratorium_interest=0,
 		generate_schedule=False,
 	):
 		prev_date = getdate(self.posting_date)
 		current_date = getdate(self.repayment_start_date)
-		total_balance = self.current_principal_amount
+		total_balance = balance_amount
 		i = 0
 
 		# schedule stats
@@ -1038,7 +1052,7 @@ class LoanRepaymentSchedule(Document):
 			principal_amount_paid = 0
 			current_monthly_repayment_amount = 0
 			interest_amount = get_interest_amount(
-				prev_date, add_days(current_date, -1), total_balance, self.rate_of_interest, self.company
+				prev_date, add_days(current_date, -1), total_balance, rate_of_interest, self.company
 			)
 
 			# set schedule states
