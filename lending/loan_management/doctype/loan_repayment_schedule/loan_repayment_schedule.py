@@ -435,6 +435,7 @@ class LoanRepaymentSchedule(Document):
 		# 		)
 		# 		balance_amount = 0
 
+		self.monthly_repayment_amount = correct_repayment_amount
 		self.repayment_schedule_from_monthly_repayment_amount(
 			correct_repayment_amount,
 			tenure,
@@ -1062,13 +1063,15 @@ class LoanRepaymentSchedule(Document):
 				in_moratorium = False
 
 			if in_moratorium:
-				moratorium_interest += interest_amount
 				if self.moratorium_type == "Principal":
 					total_balance -= interest_amount
 					current_monthly_repayment_amount = interest_amount
 				elif self.moratorium_type == "EMI":
 					current_monthly_repayment_amount = 0
 					interest_amount = 0
+
+					# During EMI moratoriums, the interest gets added up as it's not taken then
+					moratorium_interest += interest_amount
 				else:
 					frappe.throw(_("Please set a proper moratorium type"))
 
@@ -1077,22 +1080,21 @@ class LoanRepaymentSchedule(Document):
 					interest_amount += previous_interest_amount
 					previous_interest_amount = 0
 
-				principal_amount_paid = monthly_repayment_amount - interest_amount
+				# exiting the moratorium period
+				if moratorium_interest > 0:
+					if self.treatment_of_interest == "Capitalize":
+						total_balance += moratorium_interest
+					elif self.treatment_of_interest == "Add to first repayment":
+						current_monthly_repayment_amount += moratorium_interest
+						interest_amount += moratorium_interest
+					else:
+						frappe.throw(_("Treatment of Interest not properly set"))
+				moratorium_interest = 0
+
 				current_monthly_repayment_amount += monthly_repayment_amount
+				principal_amount_paid = current_monthly_repayment_amount - interest_amount
 
 			total_balance -= principal_amount_paid
-
-			# exiting the moratorium period
-			if moratorium_interest > 0 and not in_moratorium:
-				if self.treatment_of_interest == "Capitalize":
-					total_balance += moratorium_interest
-				elif self.treatment_of_interest == "Add to first repayment":
-					current_monthly_repayment_amount += moratorium_interest
-					interest_amount += moratorium_interest
-				else:
-					frappe.throw(_("Treatment of Interest not properly set"))
-
-				moratorium_interest = 0
 
 			if self.repayment_method == "Repay Fixed Amount per Period":
 				if total_balance < 0:
